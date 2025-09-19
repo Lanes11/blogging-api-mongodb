@@ -5,16 +5,17 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"log"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"net/http"
 )
 
-type album struct {
-	ID     string  `json:"id"`
-	Title  string  `json:"title"`
-	Artist string  `json:"artist"`
-	Price  float64 `json:"price"`
+type post struct {
+	ID       int    `json:"id"`
+	Title    string `json:"title"`
+	Content  string `json:"content"`
+	Category string `json:"category"`
 }
 
 var collection *mongo.Collection
@@ -31,74 +32,115 @@ func main() {
 		}
 	}()
 
-	collection = client.Database("blogging-api").Collection("albums")
+	collection = client.Database("blogging-api").Collection("posts")
 
 	router := gin.Default()
-	router.GET("/albums", getAlbums)
-	router.GET("/albums/:id", getAlbumByID)
-	router.POST("/albums", postAlbums)
+	router.GET("/posts", getAllPosts)
+	router.GET("/posts/:id", getPostByID)
+	router.POST("/posts", postPosts)
+	router.PUT("/posts/:id", updatePost)
+	router.DELETE("/posts/:id", deletePost)
 
 	router.Run("localhost:8080")
 }
 
-func getAlbums(c *gin.Context) {
+func getAllPosts(c *gin.Context) {
 	cursor, err := collection.Find(context.TODO(), map[string]interface{}{})
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer cursor.Close(context.TODO())
 
-	var albums []album
+	var posts []post
 
 	for cursor.Next(context.TODO()) {
-		var alb album
-		if err := cursor.Decode(&alb); err != nil {
+		var pst post
+		if err := cursor.Decode(&pst); err != nil {
 			log.Fatal(err)
 		}
-		albums = append(albums, alb)
+		posts = append(posts, pst)
 	}
 
 	if err := cursor.Err(); err != nil {
 		log.Fatal(err)
 	}
 
-	c.IndentedJSON(http.StatusOK, albums)
+	c.IndentedJSON(http.StatusOK, posts)
 }
 
-func postAlbums(c *gin.Context) {
-	var newAlbum album
+func postPosts(c *gin.Context) {
+	var newPost post
 
-	if err := c.BindJSON(&newAlbum); err != nil {
+	if err := c.BindJSON(&newPost); err != nil {
 		return
 	}
 
-	filter := map[string]interface{}{"id": newAlbum.ID}
+	filter := map[string]interface{}{"id": newPost.ID}
 
-	var result album
-	err := collection.FindOne(context.TODO(), filter).Decode(&result)
-	if err == nil {
+	var result post
+
+	if err := collection.FindOne(context.TODO(), filter).Decode(&result); err == nil {
 		c.IndentedJSON(http.StatusConflict, gin.H{"message": "id already exists"})
 		return
 	}
 
-	_, err = collection.InsertOne(context.TODO(), newAlbum)
-	if err != nil {
+	if _, err := collection.InsertOne(context.TODO(), newPost); err != nil {
 		log.Fatal(err)
 	}
-	c.IndentedJSON(http.StatusCreated, newAlbum)
+	c.IndentedJSON(http.StatusCreated, newPost)
 }
 
-func getAlbumByID(c *gin.Context) {
-	id := c.Param("id")
+func getPostByID(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
 
 	filter := map[string]interface{}{"id": id}
 
-	var result album
+	var result post
 
-	err := collection.FindOne(context.TODO(), filter).Decode(&result)
-	if err != nil {
-		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "album not found"})
+	if err := collection.FindOne(context.TODO(), filter).Decode(&result); err != nil {
+		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "post not found"})
+		return
 	}
 
 	c.IndentedJSON(http.StatusOK, result)
+}
+
+func updatePost(c *gin.Context) {
+	var update post
+
+	id, _ := strconv.Atoi(c.Param("id"))
+
+	filter := map[string]interface{}{"id": id}
+	if err := c.BindJSON(&update); err != nil {
+		return
+	}
+
+	updateQuery := map[string]interface{}{
+		"$set": update,
+	}
+
+	result, err := collection.UpdateOne(context.TODO(), filter, updateQuery)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if result.MatchedCount == 0 {
+		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "post not found"})
+		return
+	}
+
+	c.IndentedJSON(http.StatusOK, gin.H{"message": "post updated successfully"})
+}
+
+func deletePost(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+
+	filter := map[string]interface{}{"id": id}
+
+	if _, err := collection.DeleteOne(context.TODO(), filter); err != nil {
+		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "post not found"})
+		return
+	}
+
+	c.IndentedJSON(http.StatusOK, gin.H{"message": "post delete successfully"})
 }
